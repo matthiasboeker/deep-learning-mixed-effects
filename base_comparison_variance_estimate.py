@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import warnings
-import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 warnings.simplefilter('ignore', lineno=19)
 
@@ -86,8 +86,8 @@ def evaluate_linear_model(X, Z, beta, b, y_true):
 class NetWithRE(nn.Module):
     def __init__(self, input_size, output_size, num_random_effects):
         super(NetWithRE, self).__init__()
-        self.fc1 = nn.Linear(input_size, 16)
-        self.fc2 = nn.Linear(16, output_size)
+        self.fc1 = nn.Linear(input_size, 32)
+        self.fc2 = nn.Linear(32, output_size)
         self.dropout = nn.Dropout(0.5)
         self.b = nn.Parameter(torch.randn(num_random_effects))
         self.log_vars = nn.Parameter(torch.randn(num_random_effects))
@@ -105,8 +105,8 @@ class NetWithRE(nn.Module):
 class NetWithoutRE(nn.Module):
     def __init__(self, input_size, output_size):
         super(NetWithoutRE, self).__init__()
-        self.fc1 = nn.Linear(input_size, 16)
-        self.fc2 = nn.Linear(16, output_size)
+        self.fc1 = nn.Linear(input_size, 32)
+        self.fc2 = nn.Linear(32, output_size)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, x):
@@ -117,22 +117,37 @@ class NetWithoutRE(nn.Module):
 # Main Function
 def main():
     # Data Setup
-    n, p, q = 500, 1, 3
+    n, p, q = 1000, 1, 3
     X = torch.randn(n, p)
     Z = torch.zeros(n, q)
     groups = torch.randint(0, 3, (n,))
 
     Z = torch.ones((n, q))
     Z[:, 1] = X[:, 0] * torch.where(groups == 0, -1, 1)  # Negative slope for group 0, positive for group 1
-    Z[:, 2] = X[:, 0] * torch.where(groups == 1, -1.5, 1.5)
+    Z[:, 2] = X[:, p-1] * torch.where(groups == 1, -1.5, 1.5)
+
+    # Convert to numpy for scaling purposes
+    X_np = X.numpy()
+    Z_np = Z.numpy()
+
+    # Applying standard scaling
+    scaler_X = StandardScaler()
+    X_scaled = scaler_X.fit_transform(X_np)
+
+    scaler_Z = StandardScaler()
+    Z_scaled = scaler_Z.fit_transform(Z_np)
+
+    # Convert back to tensors
+    X = torch.tensor(X_scaled, dtype=torch.float32)
+    Z = torch.tensor(Z_scaled, dtype=torch.float32)
 
     true_beta = torch.randn(p)
     G_truth = torch.abs(torch.diag(torch.randn(q)))
     b_distribution = torch.distributions.MultivariateNormal(torch.zeros(q), covariance_matrix=G_truth)
     true_b = b_distribution.sample()
-    y = X @ true_beta + Z @ true_b + 0.1 * torch.randn(n)
-    plt.scatter(X, y)
-    plt.plot()
+    y = np.sin(X @ true_beta)**3 + Z @ true_b + 0.1 * torch.randn(n)
+    #plt.scatter(X, y)
+    #plt.plot()
 
     # Split the data
     X_train, X_test, Z_train, Z_test, y_train, y_test = train_test_split(X.numpy(), Z.numpy(), y.numpy(), test_size=0.2, random_state=42)
