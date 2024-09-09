@@ -25,7 +25,7 @@ jobs:
         python-version: "3.8"
     - name: Install dependencies
       run: |
-        conda init
+        source activate base
         conda activate deep-mixed-effects
         conda env update --file environment.yml --prune
         pip install flake8 pytest
