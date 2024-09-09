@@ -19,14 +19,17 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@v2
       with:
-        python-version: "3.8"
+        activate-environment: deep-mixed-effects
+        environment-file: environment.yml
+        python-version: 3.8
+        auto-activate-base: false
+        miniconda-version: "latest"
+
     - name: Install dependencies
       run: |
-        source activate base
-        conda activate deep-mixed-effects
         conda env update --file environment.yml --prune
         pip install flake8 pytest
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
