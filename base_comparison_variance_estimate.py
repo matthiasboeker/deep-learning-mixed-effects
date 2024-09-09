@@ -117,14 +117,15 @@ class NetWithoutRE(nn.Module):
 # Main Function
 def main():
     # Data Setup
-    n, p, q = 1000, 1, 3
+    n, p, q = 500, 1, 2
     X = torch.randn(n, p)
     Z = torch.zeros(n, q)
-    groups = torch.randint(0, 3, (n,))
+    groups = torch.randint(0, 2, (n,))
 
     Z = torch.ones((n, q))
+    Z[:, 0] = torch.where(groups == 0, 0, 1)*0.5
     Z[:, 1] = X[:, 0] * torch.where(groups == 0, -1, 1)  # Negative slope for group 0, positive for group 1
-    Z[:, 2] = X[:, p-1] * torch.where(groups == 1, -1.5, 1.5)
+    #Z[:, 2] = X[:, p-1] * torch.where(groups == 1, -1.5, 1.5)
 
     # Convert to numpy for scaling purposes
     X_np = X.numpy()
@@ -145,7 +146,7 @@ def main():
     G_truth = torch.abs(torch.diag(torch.randn(q)))
     b_distribution = torch.distributions.MultivariateNormal(torch.zeros(q), covariance_matrix=G_truth)
     true_b = b_distribution.sample()
-    y = np.sin(X @ true_beta)**3 + Z @ true_b + 0.1 * torch.randn(n)
+    y = X @ true_beta+ Z @ true_b + 0.1 * torch.randn(n)
     #plt.scatter(X, y)
     #plt.plot()
 
@@ -159,7 +160,7 @@ def main():
     log_vars = torch.randn(q, requires_grad=True)
     optimizer_linear = optim.Adam([beta, log_vars, b], lr=0.01, weight_decay=1e-4)
 
-    for iteration in range(1000):
+    for iteration in range(500):
         optimizer_linear.zero_grad()
         nll = negative_log_likelihood(y_train, X_train, Z_train, beta, log_vars, b)
         nll.backward()
@@ -173,13 +174,13 @@ def main():
     # Initialize and Train Neural Network with RE
     net_with_re = NetWithRE(input_size=p, output_size=1, num_random_effects=q)
     optimizer_re = optim.Adam(net_with_re.parameters(), lr=0.01, weight_decay=1e-4)
-    train_model_RE(net_with_re, optimizer_re, X_train, Z_train, y_train, 1000)
+    train_model_RE(net_with_re, optimizer_re, X_train, Z_train, y_train, 500)
 
     # Initialize and Train Neural Network without RE
     net_without_re = NetWithoutRE(input_size=p, output_size=1)
     optimizer_no_re = optim.Adam(net_without_re.parameters(), lr=0.01, weight_decay=1e-4)
     loss_function = nn.MSELoss()
-    train_model_NN(net_without_re, optimizer_no_re, X_train, y_train, 1000, loss_function)
+    train_model_NN(net_without_re, optimizer_no_re, X_train, y_train, 500, loss_function)
 
     # Print Random Effects and Covariance Matrix Comparisons
     print("\nComparison of Random Effects and Covariance Matrices:")
