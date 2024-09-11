@@ -1,6 +1,7 @@
 name: deep-mixed-effects
 channels:
   - pytorch
+  - anaconda
   - defaults
 dependencies:
   - blas=1.0=openblas
@@ -61,6 +62,7 @@ dependencies:
   - pooch=1.7.0=py38hca03da5_0
   - pyparsing=3.0.9=py38hca03da5_0
   - pysocks=1.7.1=py38hca03da5_0
+  - pytest=7.4.4=py38hca03da5_0
   - python=3.8.19=hb885b13_0
   - python-dateutil=2.9.0post0=py38hca03da5_2
   - python-tzdata=2023.3=pyhd3eb1b0_0
