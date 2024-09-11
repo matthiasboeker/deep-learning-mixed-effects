@@ -32,6 +32,9 @@ jobs:
       run: conda activate deep-mixed-effects
       shell: bash -l {0}
 
+    - name: List installed packages
+      run: conda list
+
     - name: Install dependencies
       run: |
         pip install flake8 pytest
