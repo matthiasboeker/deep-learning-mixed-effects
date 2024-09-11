@@ -28,11 +28,8 @@ jobs:
         auto-activate-base: true
         miniconda-version: "latest"
 
-    - name: Create environment from environment.yml
-      run: conda env create -f environment.yml
-
     - name: Activate environment
-      run: conda activate my-env
+      run: conda activate deep-mixed-effects
       shell: bash -l {0}
 
     - name: Install dependencies
