@@ -49,4 +49,5 @@ jobs:
       run: |
         source $(conda info --base)/etc/profile.d/conda.sh
         conda activate deep-mixed-effects
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
         pytest
