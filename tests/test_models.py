@@ -92,8 +92,7 @@ def test_initialize_variances_for_different_q(q):
 def test_random_effect_layer_with_zero_groups():
     q = 0
     K = 2
-    layer = RandomEffectLayer(K, q)
-    Z = torch.randn(10, q)
-    random_effects = layer(Z)
-    assert random_effects.shape == (10, 1)
-    assert torch.all(random_effects == 0)
+    with pytest.raises(
+        ValueError, match=f"Invalid value for random_effects: {0}. Expected 1 or 2."
+    ):
+        layer = RandomEffectLayer(K, q)
