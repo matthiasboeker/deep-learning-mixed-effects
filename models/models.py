@@ -22,12 +22,22 @@ def initialize_covariances(q: int) -> nn.Parameter:
 class RandomEffectLayer(nn.Module):
     def __init__(self, groups: int, random_effects: int):
         super(RandomEffectLayer, self).__init__()
+        # Validate that random_effects is either 0, 1, or 2
+        if random_effects not in [1, 2]:
+            raise ValueError(
+                f"Invalid value for random_effects: {random_effects}. Expected 1 or 2."
+            )
         variances = initialize_variances(groups)
-        covariances = initialize_covariances(groups)
+        self.nr_random_effects = random_effects
+        self.groups = groups
         self.b = nn.Parameter(torch.randn(random_effects * groups))
         self.variances_intercept = variances["variances_intercept"]
-        self.variances_slopes = variances["variances_slopes"]
-        self.covariances = covariances
+        self.variances_slopes = (
+            variances.get("variances_slopes") if random_effects > 1 else None
+        )
+        self.covariances = (
+            initialize_covariances(groups) if random_effects > 1 else None
+        )
 
     def forward(self, Z: torch.tensor) -> torch.tensor:
         random_effects = Z @ self.b
