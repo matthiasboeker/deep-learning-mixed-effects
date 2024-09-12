@@ -77,7 +77,8 @@ def create_random_effects_design_matrix(n, q, K):
     time = torch.arange(1, timesteps + 1)
     for i in range(q):
         Z[i * timesteps : (i + 1) * timesteps, i * K] = 1  # intercept
-        Z[i * timesteps : (i + 1) * timesteps, i * K + 1] = time  # slope
+        if K > 1:
+            Z[i * timesteps : (i + 1) * timesteps, i * K + 1] = time  # slope
     return Z
 
 
@@ -88,7 +89,9 @@ def initialize_fixed_random_effects(p, q, K):
 
     cov_matrices = [
         torch.tensor(
-            [
+            [[variances_true["variances_intercept"][i]]]
+            if K == 1
+            else [
                 [variances_true["variances_intercept"][i], cov_intercept_slope_true[i]],
                 [cov_intercept_slope_true[i], variances_true["variances_slopes"][i]],
             ]
@@ -148,7 +151,7 @@ def main():
 
     optimizer_linear = optim.Adam(linear_model.parameters(), lr=0.01, weight_decay=1e-6)
     optimizer_re_nn = optim.Adam(re_nn_model.parameters(), lr=0.01, weight_decay=1e-6)
-    optimizer_nn = optim.Adam(nn_model.parameters(), lr=0.01, weight_decay=1e-6)
+    optimizer_nn = optim.Adam(nn_model.parameters(), lr=0.001, weight_decay=1e-6)
     loss_fn = nn.MSELoss()
 
     loss_iterations_linear = []
@@ -157,7 +160,12 @@ def main():
             optimizer_linear.zero_grad()
             predictions = linear_model(X_batch, Z_batch)
             nll = negative_log_likelihood(
-                y_batch, predictions, Z_batch, linear_model.named_parameters()
+                y_batch,
+                predictions,
+                Z_batch,
+                linear_model.named_parameters(),
+                linear_model.random_effects.nr_random_effects,
+                linear_model.random_effects.groups,
             )
             nll.backward()
             optimizer_linear.step()
@@ -169,7 +177,12 @@ def main():
             optimizer_re_nn.zero_grad()
             predictions = re_nn_model(X_batch, Z_batch)
             nll = negative_log_likelihood(
-                y_batch, predictions, Z_batch, linear_model.named_parameters()
+                y_batch,
+                predictions,
+                Z_batch,
+                re_nn_model.named_parameters(),
+                re_nn_model.random_effects.nr_random_effects,
+                re_nn_model.random_effects.groups,
             )
             nll.backward()
             optimizer_re_nn.step()
