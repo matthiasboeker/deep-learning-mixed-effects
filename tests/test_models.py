@@ -13,7 +13,7 @@ class DummyModel(nn.Module):
         super(DummyModel, self).__init__()
         self.fc1 = nn.Linear(1, 16)
         self.fc2 = nn.Linear(16, 1)
-        self.random_effects = RandomEffectLayer(2)
+        self.random_effects = RandomEffectLayer(2, 2)
 
     def forward(self, x, Z):
         x = self.fc1(x)
@@ -33,16 +33,16 @@ def sample_inputs():
     p = 1
     n = 100
     y = torch.rand(n)
-    random_effects_design_matrix = torch.ones((n, q))
+    random_effects_design_matrix = torch.ones((n, K * q))
     groups = torch.randint(0, q, (n,))
     random_effects_design_matrix[:, 0] = torch.where(groups == 0, 0, 1) * 0.5
     random_effects_design_matrix[:, 1] = torch.where(groups == 0, -1, 1)
     X = torch.randn(n, p)
 
     true_beta = torch.randn(p)
-    G_truth = torch.abs(torch.diag(torch.randn(q)))
+    G_truth = torch.abs(torch.diag(torch.randn(K * q)))
     b_distribution = torch.distributions.MultivariateNormal(
-        torch.zeros(q), covariance_matrix=G_truth
+        torch.zeros(K * q), covariance_matrix=G_truth
     )
     true_b = b_distribution.sample()
     y = X @ true_beta + random_effects_design_matrix @ true_b + 0.1 * torch.randn(n)
@@ -53,9 +53,9 @@ def test_initialize_variances(sample_inputs):
     _, _, _, q, _ = sample_inputs
     variances = initialize_variances(q)
     assert isinstance(variances, dict)
-    assert isinstance(variances["variances_intercepts"], nn.Parameter)
+    assert isinstance(variances["variances_intercept"], nn.Parameter)
     assert isinstance(variances["variances_slopes"], nn.Parameter)
-    assert all(variances["variances_intercepts"] >= 0)
+    assert all(variances["variances_intercept"] >= 0)
     assert all(variances["variances_slopes"] >= 0)
 
 
@@ -78,7 +78,6 @@ def test_module_integration(dummy_model):
 def test_run_model(sample_inputs, dummy_model):
     y, X, random_effects_design_matrix, q, p = sample_inputs
     output = dummy_model(X, random_effects_design_matrix)
-    print(output.shape)
     assert isinstance(output, torch.Tensor)
     assert output.shape == (X.shape[0], 1)
 
@@ -86,13 +85,14 @@ def test_run_model(sample_inputs, dummy_model):
 @pytest.mark.parametrize("q", [1, 2, 10, 100])
 def test_initialize_variances_for_different_q(q):
     variances = initialize_variances(q)
-    assert variances["variances_intercepts"].shape == (q,)
+    assert variances["variances_intercept"].shape == (q,)
     assert variances["variances_slopes"].shape == (q,)
 
 
 def test_random_effect_layer_with_zero_groups():
     q = 0
-    layer = RandomEffectLayer(q)
+    K = 2
+    layer = RandomEffectLayer(K, q)
     Z = torch.randn(10, q)
     random_effects = layer(Z)
     assert random_effects.shape == (10, 1)

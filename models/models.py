@@ -7,7 +7,7 @@ def initialize_variances(q: int) -> Dict[str, nn.Parameter]:
     variances_intercepts = nn.functional.softplus(torch.randn(q) * 0.5)
     variances_slopes = nn.functional.softplus(torch.randn(q) * 0.5)
     return {
-        "variances_intercepts": nn.Parameter(variances_intercepts),
+        "variances_intercept": nn.Parameter(variances_intercepts),
         "variances_slopes": nn.Parameter(variances_slopes),
     }
 
@@ -20,12 +20,12 @@ def initialize_covariances(q: int) -> nn.Parameter:
 
 
 class RandomEffectLayer(nn.Module):
-    def __init__(self, groups: int):
+    def __init__(self, groups: int, random_effects: int):
         super(RandomEffectLayer, self).__init__()
         variances = initialize_variances(groups)
         covariances = initialize_covariances(groups)
-        self.b = nn.Parameter(torch.randn(groups))
-        self.variances_intercept = variances["variances_intercepts"]
+        self.b = nn.Parameter(torch.randn(random_effects * groups))
+        self.variances_intercept = variances["variances_intercept"]
         self.variances_slopes = variances["variances_slopes"]
         self.covariances = covariances
 
