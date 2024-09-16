@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from models.models import (
     RandomEffectLayer,
-    initialize_covariances,
-    initialize_variances,
+    get_random_slopes_parameters,
+    get_random_intercept_parameters,
 )
 
 
@@ -13,7 +13,7 @@ class DummyModel(nn.Module):
         super(DummyModel, self).__init__()
         self.fc1 = nn.Linear(1, 16)
         self.fc2 = nn.Linear(16, 1)
-        self.random_effects = RandomEffectLayer(2, 2)
+        self.random_effects = RandomEffectLayer(2, "slopes")
 
     def forward(self, x, Z):
         x = self.fc1(x)
@@ -49,20 +49,22 @@ def sample_inputs():
     return y, X, random_effects_design_matrix, q, p
 
 
-def test_initialize_variances(sample_inputs):
+def test_get_random_slopes_parameters(sample_inputs):
     _, _, _, q, _ = sample_inputs
-    variances = initialize_variances(q)
+    variances = get_random_slopes_parameters(q)
     assert isinstance(variances, dict)
     assert isinstance(variances["variances_intercept"], nn.Parameter)
     assert isinstance(variances["variances_slopes"], nn.Parameter)
+    assert isinstance(variances["covariances"], nn.Parameter)
     assert all(variances["variances_intercept"] >= 0)
     assert all(variances["variances_slopes"] >= 0)
 
 
-def test_initialize_covariances(sample_inputs):
+def test_get_random_intercept_parameters(sample_inputs):
     _, _, _, q, _ = sample_inputs
-    covariances = initialize_covariances(q)
-    assert isinstance(covariances, nn.Parameter)
+    variances = get_random_intercept_parameters(q)
+    assert isinstance(variances, dict)
+    assert isinstance(variances["variances_intercept"], nn.Parameter)
 
 
 def test_module_integration(dummy_model):
@@ -84,15 +86,18 @@ def test_run_model(sample_inputs, dummy_model):
 
 @pytest.mark.parametrize("q", [1, 2, 10, 100])
 def test_initialize_variances_for_different_q(q):
-    variances = initialize_variances(q)
+    variances = get_random_slopes_parameters(q)
     assert variances["variances_intercept"].shape == (q,)
     assert variances["variances_slopes"].shape == (q,)
 
 
 def test_random_effect_layer_with_zero_groups():
     q = 0
-    K = 2
+    with pytest.raises(ValueError, match=f"Number of groups is not positive!"):
+        layer = RandomEffectLayer(q, "slopes")
+    K = ""
     with pytest.raises(
-        ValueError, match=f"Invalid value for random_effects: {0}. Expected 1 or 2."
+        ValueError,
+        match=f"Random effect type {K} not found! \nChoose between types \n 1.'intercepts' \n 2.'slopes'",
     ):
-        layer = RandomEffectLayer(K, q)
+        layer = RandomEffectLayer(2, K)
