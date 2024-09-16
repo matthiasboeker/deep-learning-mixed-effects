@@ -7,46 +7,30 @@ def get_parameter_dict(model_parameters) -> Dict[str, nn.Parameter]:
     return dict(model_parameters)
 
 
-def assemble_covariance_matrix(
-    dict_parameters: Dict[str, nn.Parameter]
-) -> torch.Tensor:
-    block_a = torch.diag_embed(dict_parameters["variances_intercept"])
-    cov_intercept_slope = (
-        dict_parameters["covariances"]
-        * dict_parameters["variances_slopes"]
-        * dict_parameters["variances_intercept"]
-    )
-    block_b = torch.diag_embed(cov_intercept_slope)
-    block_c = torch.diag_embed(dict_parameters["variances_slopes"])
-    upper = torch.cat([block_a, block_b], dim=1)
-    lower = torch.cat([block_b.transpose(0, 1), block_c], dim=1)
-    covariance_matrix = torch.cat([upper, lower], dim=0)
-    return covariance_matrix
-
-
 def negative_log_likelihood(
     y: torch.Tensor,
     predictions: torch.Tensor,
     random_effects_design_matrix: torch.Tensor,
-    model_parameters,
+    random_effects_covariance_matrix,
+    K: int,
+    q: int,
     regularization_terms={"re_cov_matrix_reg": 1e-4, "cov_matrix_reg": 1e-4},
 ):
-    # Here we assume that predictions contain y - X @ beta - Z @ b
-    residuals = y - predictions
-    residuals = residuals.unsqueeze(1)
-    dict_parameters = get_parameter_dict(model_parameters)
-
-    if (
-        torch.any(torch.isnan(dict_parameters["variances_intercept"]))
-        or torch.any(torch.isinf(dict_parameters["variances_intercept"]))
-        or torch.any(torch.isinf(dict_parameters["variances_slopes"]))
-        or torch.any(torch.isnan(dict_parameters["variances_slopes"]))
-    ):
+    # dict_parameters = get_parameter_dict(model_parameters)
+    if random_effects_design_matrix.size(1) != q * K:
         raise ValueError(
-            "Stability issues detected in var_intercepts: NaNs or Infs found in variances."
+            f"random_effects_design_matrix has incompatible size {random_effects_design_matrix.size(1)}, "
+            f"expected {q * K} based on q={q} and K={K}."
         )
 
-    random_effects_covariance_matrix = assemble_covariance_matrix(dict_parameters)
+    residuals = y.squeeze() - predictions.squeeze()
+    residuals = residuals.unsqueeze(dim=1)
+
+    if torch.any(torch.isnan(random_effects_covariance_matrix)) or torch.any(
+        torch.isinf(random_effects_covariance_matrix)
+    ):
+        raise ValueError("Stability issues detected in covariance matrix.")
+
     regularization_strength = (
         regularization_terms["re_cov_matrix_reg"]
         * torch.max(torch.abs(random_effects_covariance_matrix)).item()
@@ -55,6 +39,7 @@ def negative_log_likelihood(
         random_effects_covariance_matrix.size(0)
     )
 
+    # Covariance matrix for the residuals (y - predictions)
     covariance_matrix = (
         random_effects_design_matrix
         @ random_effects_covariance_matrix
@@ -62,6 +47,7 @@ def negative_log_likelihood(
         + torch.eye(len(random_effects_design_matrix))
     )
 
+    # Apply regularization to the covariance matrix
     regularization_strength = (
         regularization_terms["cov_matrix_reg"]
         * torch.max(torch.abs(covariance_matrix)).item()
@@ -75,9 +61,15 @@ def negative_log_likelihood(
         U, S, Vh = torch.linalg.svd(covariance_matrix)
         S_inv = torch.diag(1.0 / S)
         covariance_matrix_inv = Vh.T @ S_inv @ U.T
-    _, logdet_cov_mat = torch.slogdet(covariance_matrix_inv)
 
+    # Log-determinant of the covariance matrix
+    _, logdet_cov_mat = torch.slogdet(covariance_matrix_inv)
+    if torch.isnan(logdet_cov_mat) or torch.isinf(logdet_cov_mat):
+        raise ValueError("Log-determinant of covariance matrix is NaN or Inf.")
+
+    # Compute the negative log-likelihood
     nll = 0.5 * residuals.transpose(
         0, 1
     ) @ covariance_matrix_inv @ residuals + 0.5 * torch.abs(logdet_cov_mat)
+
     return nll

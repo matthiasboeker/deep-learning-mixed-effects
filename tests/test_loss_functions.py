@@ -1,13 +1,12 @@
 import pytest
 import torch
 import torch.nn as nn
-from typing import Dict
 
 from models.loss_functions import (
     negative_log_likelihood,
     get_parameter_dict,
-    assemble_covariance_matrix,
 )
+from models.models import assemble_covariance_matrix
 
 # Dummy model for testing purposes
 class DummyModel(nn.Module):
@@ -34,7 +33,7 @@ def sample_inputs():
     y = torch.rand(n)
     predictions = torch.rand(n)
     random_effects_design_matrix = torch.ones(n, K * q)
-    return y, predictions, random_effects_design_matrix
+    return y, predictions, random_effects_design_matrix, K, q
 
 
 @pytest.fixture
@@ -64,7 +63,8 @@ def test_get_parameter_dict(dummy_model):
 
 
 # Test for assemble_covariance_matrix with valid parameters
-def test_assemble_covariance_matrix_valid(dummy_model):
+def test_assemble_covariance_matrix_valid(dummy_model, sample_inputs):
+    y, predictions, random_effects_design_matrix, K, q = sample_inputs
     dict_parameters = get_parameter_dict(dummy_model.named_parameters())
     cov_matrix = assemble_covariance_matrix(dict_parameters)
     assert cov_matrix.size() == (6, 6)  # Check if dimensions are correct
@@ -72,42 +72,65 @@ def test_assemble_covariance_matrix_valid(dummy_model):
 
 # Test for negative_log_likelihood with valid input
 def test_negative_log_likelihood_valid(valid_model_parameters, sample_inputs):
-    y, predictions, random_effects_design_matrix = sample_inputs
+    y, predictions, random_effects_design_matrix, K, q = sample_inputs
+    dict_parameters = get_parameter_dict(valid_model_parameters)
+    cov_matrix = assemble_covariance_matrix(dict_parameters)
     nll = negative_log_likelihood(
-        y, predictions, random_effects_design_matrix, valid_model_parameters
+        y, predictions, random_effects_design_matrix, cov_matrix, K, q
     )
     assert nll >= 0  # NLL should be positive
 
 
 # Test for NaN in variances_intercept, expecting ValueError
 def test_negative_log_likelihood_nan(invalid_model_parameters_nan, sample_inputs):
-    y, predictions, random_effects_design_matrix = sample_inputs
-    with pytest.raises(ValueError, match="Stability issues detected in var_intercepts"):
+    y, predictions, random_effects_design_matrix, K, q = sample_inputs
+    dict_parameters = get_parameter_dict(invalid_model_parameters_nan)
+    cov_matrix = assemble_covariance_matrix(dict_parameters)
+    with pytest.raises(
+        ValueError, match="Stability issues detected in covariance matrix."
+    ):
         negative_log_likelihood(
-            y, predictions, random_effects_design_matrix, invalid_model_parameters_nan
+            y,
+            predictions,
+            random_effects_design_matrix,
+            cov_matrix,
+            K,
+            q,
         )
 
 
 # Test for Inf in slopes_variances, expecting ValueError
 def test_negative_log_likelihood_inf(invalid_model_parameters_inf, sample_inputs):
-    y, predictions, random_effects_design_matrix = sample_inputs
-    with pytest.raises(ValueError, match="Stability issues detected in var_intercepts"):
+    y, predictions, random_effects_design_matrix, K, q = sample_inputs
+    dict_parameters = get_parameter_dict(invalid_model_parameters_inf)
+    cov_matrix = assemble_covariance_matrix(dict_parameters)
+    with pytest.raises(
+        ValueError, match="Stability issues detected in covariance matrix."
+    ):
         negative_log_likelihood(
-            y, predictions, random_effects_design_matrix, invalid_model_parameters_inf
+            y,
+            predictions,
+            random_effects_design_matrix,
+            cov_matrix,
+            K,
+            q,
         )
 
 
 # Test the regularization part by manually checking regularization strength
 def test_negative_log_likelihood_regularization_strength(dummy_model, sample_inputs):
-    y, predictions, random_effects_design_matrix = sample_inputs
+    y, predictions, random_effects_design_matrix, K, q = sample_inputs
     regularization_terms = {"re_cov_matrix_reg": 1e-3, "cov_matrix_reg": 1e-3}
-
+    dict_parameters = get_parameter_dict(dummy_model.named_parameters())
+    cov_matrix = assemble_covariance_matrix(dict_parameters)
     nll = negative_log_likelihood(
         y,
         predictions,
         random_effects_design_matrix,
-        dummy_model.named_parameters(),
+        cov_matrix,
+        K,
+        q,
         regularization_terms,
     )
 
-    assert nll >= 0  # Check if regularization maintains positive NLL
+    assert nll >= 0
