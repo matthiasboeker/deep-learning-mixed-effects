@@ -84,16 +84,17 @@ def create_random_effects_design_matrix(n, q, K):
 
 def initialize_fixed_random_effects(p, q, K):
     true_beta = torch.randn(p)
-    variances_true = initialize_variances(q)
+    variances_intercept_true = initialize_variances(q)
+    variances_slope_true = initialize_variances(q)
     cov_intercept_slope_true = initialize_covariances(q)
 
     cov_matrices = [
         torch.tensor(
-            [[variances_true["variances_intercept"][i]]]
+            [[variances_intercept_true[i]]]
             if K == 1
             else [
-                [variances_true["variances_intercept"][i], cov_intercept_slope_true[i]],
-                [cov_intercept_slope_true[i], variances_true["variances_slopes"][i]],
+                [variances_intercept_true[i], cov_intercept_slope_true[i]],
+                [cov_intercept_slope_true[i], variances_slope_true[i]],
             ]
         )
         for i in range(q)
@@ -124,7 +125,7 @@ def scale_data(X, Z):
 
 # Main Function
 def main():
-    n, q, K, p = 500, 5, 2, 1
+    n, q, K, p = 500, 10, 2, 1
     epochs = 250
     batch_size = 128
     X = torch.randn(n, p)
@@ -145,8 +146,8 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    linear_model = LinearModel(p, 1, q, K)
-    re_nn_model = NetWithRE(p, 1, q, K)
+    linear_model = LinearModel(p, 1, q, "slopes")
+    re_nn_model = NetWithRE(p, 1, q, "slopes")
     nn_model = NetWithoutRE(p, 1)
 
     optimizer_linear = optim.Adam(linear_model.parameters(), lr=0.01, weight_decay=1e-6)
@@ -159,13 +160,14 @@ def main():
         for X_batch, Z_batch, y_batch in train_loader:
             optimizer_linear.zero_grad()
             predictions = linear_model(X_batch, Z_batch)
+            covariance_matrix = linear_model.random_effects.get_covariance_matrix()
             nll = negative_log_likelihood(
                 y_batch,
                 predictions,
                 Z_batch,
-                linear_model.named_parameters(),
+                covariance_matrix,
                 linear_model.random_effects.nr_random_effects,
-                linear_model.random_effects.groups,
+                linear_model.random_effects.nr_groups,
             )
             nll.backward()
             optimizer_linear.step()
@@ -176,13 +178,14 @@ def main():
         for X_batch, Z_batch, y_batch in train_loader:
             optimizer_re_nn.zero_grad()
             predictions = re_nn_model(X_batch, Z_batch)
+            covariance_matrix = re_nn_model.random_effects.get_covariance_matrix()
             nll = negative_log_likelihood(
                 y_batch,
                 predictions,
                 Z_batch,
-                re_nn_model.named_parameters(),
+                covariance_matrix,
                 re_nn_model.random_effects.nr_random_effects,
-                re_nn_model.random_effects.groups,
+                re_nn_model.random_effects.nr_groups,
             )
             nll.backward()
             optimizer_re_nn.step()
