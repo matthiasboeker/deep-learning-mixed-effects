@@ -28,6 +28,13 @@ def get_participant_id(file_name: str):
     return participant_id
 
 
+def get_participant_ids(file_names: List[str]) -> List[str]:
+    participant_ids = list(
+        set([re.findall(r"\d+", file_name)[0] for file_name in file_names])
+    )
+    return participant_ids
+
+
 def create_ts_windows(data: torch.Tensor, sequence_length: int) -> torch.Tensor:
     """
     Create sliding windows of fixed size from time series data.
@@ -103,9 +110,13 @@ class TSDataset(Dataset):
         self.path_to_ts_folder = path_to_ts_folder
         self.sequence_length = sequence_length
         self.file_names = get_ts_file_names(path_to_ts_folder)
+        self.participants_ids = get_participant_ids(self.file_names)
         self.selected_ts_features = selected_ts_features
         self.selected_target = selected_target
         self.aggregation_fun = aggregation_fun
+        self.participant_id_to_idx = {
+            pid: idx for idx, pid in enumerate(self.participants_ids)
+        }
 
     def __len__(self):
         return len(self.file_names)
@@ -137,7 +148,39 @@ class TSDataset(Dataset):
         metadata_repeated = metadata.repeat(
             windows_tensor.size(0), 1
         )  # Repeat metadata for each window
-        Z_random_intercept = create_random_intercepts_design_matrix(
-            windows_tensor.size(0), 1
+        Z_dynamic = self.create_random_intercepts_design_matrix(
+            [participant_id], self.participants_ids, windows_tensor.size(0)
         )
-        return windows_tensor, metadata_repeated, targets_tensor, Z_random_intercept
+
+        return windows_tensor, metadata_repeated, targets_tensor, Z_dynamic
+
+    def create_random_intercepts_design_matrix(
+        self,
+        batch_participants: List[int],
+        all_participants: List[int],
+        num_windows: int,
+    ) -> torch.Tensor:
+        """
+        Create the design matrix for random intercepts.
+
+        Args:
+            batch_participants (List[int]): List of participant IDs in the current batch.
+            all_participants (List[int]): List of all participant IDs in the dataset.
+            num_windows (int): Number of windows (repeated rows for each participant).
+
+        Returns:
+            torch.Tensor: Design matrix of size [num_windows, num_participants].
+        """
+        num_participants = len(all_participants)
+
+        # Create a design matrix of size [num_windows, num_participants]
+        Z_batch = torch.zeros(num_windows, num_participants)
+
+        # Use the mapping to find the correct column in Z_batch
+        for participant_id in batch_participants:
+            participant_idx = self.participant_id_to_idx[str(participant_id)]
+            Z_batch[
+                :, participant_idx
+            ] = 1  # Set the column corresponding to the participant to 1
+
+        return Z_batch
