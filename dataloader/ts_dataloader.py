@@ -1,11 +1,16 @@
 from pathlib import Path
 import re
-from typing import Callable, List, Tuple
+from typing import Callable, List
 import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
+
+
+def create_random_intercepts_design_matrix(n: int, q: int) -> torch.Tensor:
+    Z = torch.zeros(n, q)
+    Z[:, 0] = 1  # Random intercept for each participant (1 for all windows)
+    return Z
 
 
 def empty_aggregation(targets: pd.Series):
@@ -14,30 +19,8 @@ def empty_aggregation(targets: pd.Series):
     return targets
 
 
-def preprocess_metadata(metadata: pd.DataFrame) -> pd.DataFrame:
-    """Preprocess the metadata dataframe.
-    Male: 0 Female: 1
-    TODO: STAI SCORING"""
-
-    metadata["Sex"] = metadata["Sex"].apply(lambda x: 0 if x == "Male" else 1)
-    metadata["Approximate number climbing"] = metadata[
-        [
-            "Approximate the number of hours that you spend top-rope climbing per week",
-            "Approximate the number of hours that you spend lead climbing per week.",
-        ]
-    ].sum(axis=0)
-    metadata["bmi"] = metadata.apply(
-        lambda x: x["Body mass (kg)"] / (x["Height (cm)"] / 10) ** 2
-    )
-    return metadata
-
-
 def get_ts_file_names(path_to_ts_folder: Path) -> List[str]:
     return list(filter(lambda x: ".csv" in x, os.listdir(path_to_ts_folder)))
-
-
-def read_in_meta_data(path_to_meta_data: Path) -> pd.DataFrame:
-    return pd.read_csv(path_to_meta_data, engine="python")
 
 
 def get_participant_id(file_name: str):
@@ -45,7 +28,7 @@ def get_participant_id(file_name: str):
     return participant_id
 
 
-def create_windows(data: torch.Tensor, sequence_length: int) -> torch.Tensor:
+def create_ts_windows(data: torch.Tensor, sequence_length: int) -> torch.Tensor:
     """
     Create sliding windows of fixed size from time series data.
 
@@ -69,21 +52,58 @@ def create_windows(data: torch.Tensor, sequence_length: int) -> torch.Tensor:
     return windows
 
 
+def create_target_windows(
+    targets: torch.Tensor, sequence_length: int, reduction: str = "majority"
+) -> torch.Tensor:
+    """
+    Create windows of target values where one target is generated per window (e.g., by taking the mean).
+
+    Args:
+        targets (torch.Tensor): The target values, shape [num_timesteps].
+        sequence_length (int): The length of each window.
+        reduction (str): The reduction method to apply to the targets per window ('mean', 'last', 'sum').
+
+    Returns:
+        torch.Tensor: A tensor of shape [num_windows], where each element is the reduced target for that window.
+    """
+    num_timesteps = targets.size(0)
+
+    # If targets are shorter than the sequence length, pad with zeros
+    if num_timesteps < sequence_length:
+        pad_size = sequence_length - num_timesteps
+        targets = torch.nn.functional.pad(targets, (0, pad_size))
+    # Reshape the targets into windows (this will reshape to [num_windows, sequence_length])
+    target_windows = targets.unfold(0, sequence_length, sequence_length)
+    # Apply reduction (e.g., mean, last value, or sum)
+    if reduction == "mean":
+        target_windows = target_windows.mean(dim=1)
+    elif reduction == "sum":
+        target_windows = target_windows.sum(dim=1)
+    elif reduction == "last":
+        target_windows = target_windows[:, -1]
+    elif reduction == "majority":
+        target_windows, _ = torch.mode(target_windows, dim=1)
+    else:
+        raise ValueError(f"Unsupported reduction method: {reduction}")
+
+    return target_windows
+
+
 class TSDataset(Dataset):
     def __init__(
         self,
         path_to_ts_folder: Path,
-        path_to_meta_data: Path,
-        sequence_length: int,
-        selected_features: List[str],
+        meta_data: pd.DataFrame,
+        selected_ts_features: List[str],
         selected_target: List[str],
+        sequence_length: int,
         aggregation_fun: Callable = empty_aggregation,
     ):
-        self.metadata = read_in_meta_data(path_to_meta_data)
+        self.metadata = meta_data
         self.path_to_ts_folder = path_to_ts_folder
         self.sequence_length = sequence_length
         self.file_names = get_ts_file_names(path_to_ts_folder)
-        self.selected_features = selected_features
+        self.selected_ts_features = selected_ts_features
         self.selected_target = selected_target
         self.aggregation_fun = aggregation_fun
 
@@ -95,36 +115,29 @@ class TSDataset(Dataset):
         file_name = self.file_names[idx]
         participant_id = get_participant_id(file_name)
         metadata_row = self.metadata[
-            self.metadata["Participant ID"] == participant_id
+            self.metadata["Participant ID"] == int(participant_id)
         ].copy()
-        metadata = metadata_row[
-            [
-                "Age",
-                "Sex",
-                "bmi",
-                "Climbing experience (years)",
-                "Bouldering experience (years)",
-                "Approximate number climbing",
-                "Approximate the number of hours that you spend bouldering per week",
-            ]
-        ].values
-        metadata["type"] = 1 if "toprope" in file_name else 0
-        metadata = torch.tensor(metadata, dtype=torch.float32)
+        metadata_row["type"] = 1 if "toprope" in file_name else 0
+        metadata = torch.tensor(metadata_row.values, dtype=torch.float32)
         time_series_data = pd.read_csv(self.path_to_ts_folder / file_name)
         time_series_features = torch.tensor(
-            time_series_data[self.selected_features].values, dtype=torch.float32
+            time_series_data[self.selected_ts_features].values, dtype=torch.float32
         )
         time_series_targets = torch.tensor(
-            self.aggregation_fun(time_series_data[self.selected_target], dim=0),
+            self.aggregation_fun(time_series_data[self.selected_target], axis=1),
             dtype=torch.float32,
         )
 
-        windows_tensor = create_windows(
+        windows_tensor = create_ts_windows(
             time_series_features, self.sequence_length
         )  # Shape: [num_windows, sequence_length, num_features]
-        targets_tensor = create_windows(time_series_targets, self.sequence_length)
-        metadata_repeated = metadata.unsqueeze(0).repeat(
+        targets_tensor = create_target_windows(
+            time_series_targets, self.sequence_length
+        )
+        metadata_repeated = metadata.repeat(
             windows_tensor.size(0), 1
         )  # Repeat metadata for each window
-
-        return windows_tensor, metadata_repeated, targets_tensor
+        Z_random_intercept = create_random_intercepts_design_matrix(
+            windows_tensor.size(0), 1
+        )
+        return windows_tensor, metadata_repeated, targets_tensor, Z_random_intercept
