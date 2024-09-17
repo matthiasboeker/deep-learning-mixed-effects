@@ -1,5 +1,5 @@
 import torch
-from dataloader.ts_dataloader import create_windows
+from dataloader.ts_dataloader import create_ts_windows
 
 
 def test_create_windows_no_padding():
@@ -12,10 +12,9 @@ def test_create_windows_no_padding():
     time_series_data = torch.randn(num_timesteps, num_features)
 
     # Call the function
-    windows = create_windows(time_series_data, sequence_length)
+    windows = create_ts_windows(time_series_data, sequence_length)
 
     # Check the shape of the output (should be [num_windows, sequence_length, num_features])
-    print(windows)
     assert windows.shape == (
         3,
         sequence_length,
@@ -33,7 +32,7 @@ def test_create_windows_with_padding():
     time_series_data = torch.randn(num_timesteps, num_features)
 
     # Call the function
-    windows = create_windows(time_series_data, sequence_length)
+    windows = create_ts_windows(time_series_data, sequence_length)
 
     # Check that the shape of the output is [1, sequence_length, num_features]
     assert windows.shape == (1, sequence_length, num_features)
@@ -52,7 +51,7 @@ def test_create_windows_exact_sequence_length():
     time_series_data = torch.randn(num_timesteps, num_features)
 
     # Call the function
-    windows = create_windows(time_series_data, sequence_length)
+    windows = create_ts_windows(time_series_data, sequence_length)
 
     # Check that the shape of the output is [1, sequence_length, num_features]
     assert windows.shape == (1, sequence_length, num_features)
@@ -68,7 +67,7 @@ def test_create_windows_partial_window():
     time_series_data = torch.randn(num_timesteps, num_features)
 
     # Call the function
-    windows = create_windows(time_series_data, sequence_length)
+    windows = create_ts_windows(time_series_data, sequence_length)
 
     # Check the shape of the output (should be [2, sequence_length, num_features])
     assert windows.shape == (
