@@ -156,8 +156,8 @@ class TSDataset(Dataset):
 
     def create_random_intercepts_design_matrix(
         self,
-        batch_participants: List[int],
-        all_participants: List[int],
+        batch_participants: List[str],
+        all_participants: List[str],
         num_windows: int,
     ) -> torch.Tensor:
         """
@@ -178,7 +178,9 @@ class TSDataset(Dataset):
 
         # Use the mapping to find the correct column in Z_batch
         for participant_id in batch_participants:
-            participant_idx = self.participant_id_to_idx[str(participant_id)]
+            print(type(participant_id))
+            print(participant_id)
+            participant_idx = self.participant_id_to_idx[participant_id]
             Z_batch[
                 :, participant_idx
             ] = 1  # Set the column corresponding to the participant to 1
