@@ -5,13 +5,14 @@ import torch
 import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
-from sklearn.metrics import mean_squared_error, r2_score  # type: ignore
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+
 
 from dataloader.ts_dataloader import TSDataset, custom_collate_fn
-from models.timeseries_networks import TSNN
+from models.timeseries_networks import TSNN, TSNNWithoutRE
 from models.loss_functions import negative_log_likelihood
-
+from models.explainability import compute_saliency_map, plot_saliency
 from example_script import evaluate_model, visualise_regression_results
 
 
@@ -46,6 +47,8 @@ def preprocess_metadata(
         lambda x: x["Body mass (kg)"] / (x["Height (cm)"] / 100) ** 2, axis=1
     )
     metadata.fillna(metadata.mean(), inplace=True)
+    scaler = StandardScaler()
+    metadata.iloc[:, 1:] = scaler.fit_transform(metadata.iloc[:, 1:])
     return metadata
 
 
@@ -76,7 +79,7 @@ def main():
         "Approximate the number of hours that you spend bouldering per week",
     ]
     metadata = preprocess_metadata(metadata, selected_meta_features)
-    selected_ts_features = ["IEMG"]
+    selected_ts_features = ["MNF"]
     selected_targets = [
         "Anxiety level",
         "Fear of falling due to fatigue",
@@ -98,9 +101,10 @@ def main():
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size, collate_fn=custom_collate_fn
     )
-    # Create the model
-    model = TSNN(
-        1,
+
+    # Create the model with and without random effects
+    model_re = TSNN(
+        len(selected_ts_features),
         metadata.shape[1] + 1,
         hidden_merge_size,
         hidden_ts_size,
@@ -110,61 +114,99 @@ def main():
         19,
         "intercepts",
     )
+    model_no_re = TSNNWithoutRE(
+        len(selected_ts_features),
+        metadata.shape[1] + 1,
+        hidden_merge_size,
+        hidden_ts_size,
+        hidden_meta_size,
+        num_layers,
+        output_size,
+    )
 
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    optimizer_re = optim.Adam(model_re.parameters(), lr=0.01, weight_decay=1e-4)
+    optimizer_no_re = optim.Adam(model_no_re.parameters(), lr=0.001, weight_decay=1e-4)
 
     loss_iterations_re_nn = []
+    loss_iterations_no_re_nn = []
+
     for epoch in range(epochs):
         for ts_features, meta_features, y_batch, Z_batch in train_loader:
             for i in range(ts_features.size()[1]):
-                # print("TS Feature size ", ts_features[:, i,:].size())
-                # print("Z size ",Z_batch.size())
-                optimizer.zero_grad()
-                predictions = model(
+                # Model with random effects
+                optimizer_re.zero_grad()
+                predictions_re = model_re(
                     ts_features[:, i, :], meta_features, Z_batch[:, i, :]
                 )
-                covariance_matrix = model.random_effects.get_covariance_matrix()
-                nll = negative_log_likelihood(
+                covariance_matrix = model_re.random_effects.get_covariance_matrix()
+                nll_re = negative_log_likelihood(
                     y_batch[:, i],
-                    predictions,
+                    predictions_re,
                     Z_batch[:, i, :],
                     covariance_matrix,
-                    model.random_effects.nr_random_effects,
-                    model.random_effects.nr_groups,
+                    model_re.random_effects.nr_random_effects,
+                    model_re.random_effects.nr_groups,
                 )
-                nll.backward()
-                optimizer.step()
-        loss_iterations_re_nn.append(nll.item())
+                nll_re.backward()
+                optimizer_re.step()
+
+                # Model without random effects
+                optimizer_no_re.zero_grad()
+                predictions_no_re = model_no_re(ts_features[:, i, :], meta_features)
+                loss_no_re = torch.nn.functional.mse_loss(
+                    predictions_no_re.squeeze(1), y_batch[:, i]
+                )
+                loss_no_re.backward()
+                optimizer_no_re.step()
+
+        loss_iterations_re_nn.append(nll_re.item())
+        loss_iterations_no_re_nn.append(loss_no_re.item())
+
         if epoch % 10 == 0:
             print(f"Epoch: {epoch}")
-    # output = model(ts_features, meta_features, Z_batch[:,-1,:])
-    # print(output.shape)
-    plt.plot(loss_iterations_re_nn)
+
+    # Plot the loss curves for both models
+    plt.plot(loss_iterations_re_nn, label="Model with RE")
+    plt.plot(loss_iterations_no_re_nn, label="Model without RE")
+    plt.legend()
     plt.show()
+
     with torch.no_grad():
         test_y_list = []
-        test_predictions_list = []
+        test_predictions_re_list = []
+        test_predictions_no_re_list = []
 
         for ts_features, meta_features, y_batch, Z_batch in test_loader:
             for i in range(ts_features.size(1)):
-                predictions = model(
+                # Model with random effects
+                predictions_re = model_re(
                     ts_features[:, i, :], meta_features, Z_batch[:, i, :]
                 )
+                test_predictions_re_list.append(predictions_re)
 
-                # Append the predictions and true values
-                test_predictions_list.append(predictions)
+                # Model without random effects
+                predictions_no_re = model_no_re(ts_features[:, i, :], meta_features)
+                test_predictions_no_re_list.append(predictions_no_re)
+
+                # Append the true labels
                 test_y_list.append(y_batch[:, i])
 
         # Concatenate all batches
-        test_predictions_full = torch.cat(test_predictions_list, dim=0)
+        test_predictions_re_full = torch.cat(test_predictions_re_list, dim=0)
+        test_predictions_no_re_full = torch.cat(test_predictions_no_re_list, dim=0)
         test_y_full = torch.cat(test_y_list, dim=0)
 
-        # Evaluate the model
-        evaluate_model(test_predictions_full, test_y_full, "TSNN Model")
+        # Evaluate the models
+        evaluate_model(test_predictions_re_full, test_y_full, "TSNN Model with RE")
+        evaluate_model(
+            test_predictions_no_re_full, test_y_full, "TSNN Model without RE"
+        )
+
         visualise_regression_results(
             test_y_full,
             {
-                "RE NN Model": test_predictions_full,
+                "RE NN Model": test_predictions_re_full,
+                "No RE NN Model": test_predictions_no_re_full,
             },
         )
 
