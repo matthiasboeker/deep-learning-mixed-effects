@@ -7,6 +7,52 @@ import torch
 from torch.utils.data import Dataset
 
 
+def custom_collate_fn(batch):
+    """
+    Custom collate function to pad windows in the batch to ensure all tensors are of the same size
+    and handle metadata at the participant level (not window level).
+    """
+    # Find the max number of windows across all items in the batch
+    max_num_windows = max([item[0].size(0) for item in batch])
+
+    # Pad the windows_tensor and targets_tensor for each item in the batch
+    padded_windows = []
+    padded_targets = []
+    metadata_batch = []
+    random_intercepts_batch = []
+
+    for windows_tensor, metadata_repeated, targets_tensor, Z_random_intercept in batch:
+        # Pad the windows_tensor to the max number of windows
+        pad_size = max_num_windows - windows_tensor.size(0)
+        if pad_size > 0:
+            windows_tensor = torch.nn.functional.pad(
+                windows_tensor,
+                (0, 0, 0, 0, 0, pad_size),  # Only pad the first dimension (num_windows)
+            )
+            targets_tensor = torch.nn.functional.pad(targets_tensor, (0, pad_size))
+            Z_random_intercept = torch.nn.functional.pad(
+                Z_random_intercept, (0, 0, 0, pad_size)
+            )
+
+        padded_windows.append(windows_tensor)
+        padded_targets.append(targets_tensor)
+        random_intercepts_batch.append(Z_random_intercept)
+        # Metadata should only be added once per participant, so we just append it without repeating it
+        metadata_batch.append(
+            metadata_repeated[0]
+        )  # Take the first occurrence (same for all windows)
+
+    # Stack the windows and targets tensors to create a batch
+    windows_batch = torch.stack(padded_windows)
+    targets_batch = torch.stack(padded_targets)
+    random_intercepts_batch = torch.stack(random_intercepts_batch)
+
+    # Stack metadata (one entry per participant)
+    metadata_batch = torch.stack(metadata_batch)
+
+    return windows_batch, metadata_batch, targets_batch, random_intercepts_batch
+
+
 def create_random_intercepts_design_matrix(n: int, q: int) -> torch.Tensor:
     Z = torch.zeros(n, q)
     Z[:, 0] = 1  # Random intercept for each participant (1 for all windows)
@@ -178,8 +224,6 @@ class TSDataset(Dataset):
 
         # Use the mapping to find the correct column in Z_batch
         for participant_id in batch_participants:
-            print(type(participant_id))
-            print(participant_id)
             participant_idx = self.participant_id_to_idx[participant_id]
             Z_batch[
                 :, participant_idx

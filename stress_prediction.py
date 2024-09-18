@@ -3,10 +3,16 @@ from pathlib import Path
 import pandas as pd
 import torch
 import numpy as np
-import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
+from sklearn.metrics import mean_squared_error, r2_score  # type: ignore
+import matplotlib.pyplot as plt
 
-from dataloader.ts_dataloader import TSDataset
+from dataloader.ts_dataloader import TSDataset, custom_collate_fn
+from models.timeseries_networks import TSNN
+from models.loss_functions import negative_log_likelihood
+
+from example_script import evaluate_model, visualise_regression_results
 
 
 def train_test_split(dataset: TSDataset, split: float) -> Tuple[TSDataset]:
@@ -16,52 +22,6 @@ def train_test_split(dataset: TSDataset, split: float) -> Tuple[TSDataset]:
     return random_split(
         dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42)
     )
-
-
-def custom_collate_fn(batch):
-    """
-    Custom collate function to pad windows in the batch to ensure all tensors are of the same size
-    and handle metadata at the participant level (not window level).
-    """
-    # Find the max number of windows across all items in the batch
-    max_num_windows = max([item[0].size(0) for item in batch])
-
-    # Pad the windows_tensor and targets_tensor for each item in the batch
-    padded_windows = []
-    padded_targets = []
-    metadata_batch = []
-    random_intercepts_batch = []
-
-    for windows_tensor, metadata_repeated, targets_tensor, Z_random_intercept in batch:
-        # Pad the windows_tensor to the max number of windows
-        pad_size = max_num_windows - windows_tensor.size(0)
-        if pad_size > 0:
-            windows_tensor = torch.nn.functional.pad(
-                windows_tensor,
-                (0, 0, 0, 0, 0, pad_size),  # Only pad the first dimension (num_windows)
-            )
-            targets_tensor = torch.nn.functional.pad(targets_tensor, (0, pad_size))
-            Z_random_intercept = torch.nn.functional.pad(
-                Z_random_intercept, (0, 0, 0, pad_size)
-            )
-
-        padded_windows.append(windows_tensor)
-        padded_targets.append(targets_tensor)
-        random_intercepts_batch.append(Z_random_intercept)
-        # Metadata should only be added once per participant, so we just append it without repeating it
-        metadata_batch.append(
-            metadata_repeated[0]
-        )  # Take the first occurrence (same for all windows)
-
-    # Stack the windows and targets tensors to create a batch
-    windows_batch = torch.stack(padded_windows)
-    targets_batch = torch.stack(padded_targets)
-    random_intercepts_batch = torch.stack(random_intercepts_batch)
-
-    # Stack metadata (one entry per participant)
-    metadata_batch = torch.stack(metadata_batch)
-
-    return windows_batch, metadata_batch, targets_batch, random_intercepts_batch
 
 
 def read_in_meta_data(path_to_meta_data: Path) -> pd.DataFrame:
@@ -90,6 +50,15 @@ def preprocess_metadata(
 
 
 def main():
+    sequence_length = 90
+    batch_size = 16
+    epochs = 100
+    hidden_ts_size = 64
+    hidden_meta_size = 32
+    hidden_merge_size = 64
+    num_layers = 1
+    output_size = 1  # For regression
+
     path_to_ts_folder = Path(__file__).parent / "data" / "climbing_data"
     metadata = read_in_meta_data(
         Path(__file__).parent / "data" / "stai_questionnaire.csv"
@@ -113,8 +82,6 @@ def main():
         "Fear of falling due to fatigue",
         "Fear of heights",
     ]
-    sequence_length = 30
-    batch_size = 16
 
     dataset = TSDataset(
         path_to_ts_folder,
@@ -124,7 +91,6 @@ def main():
         aggregation_fun=np.sum,
         sequence_length=sequence_length,
     )
-    print(len(dataset.file_names))
     train_dataset, test_dataset = train_test_split(dataset, split=0.8)
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, collate_fn=custom_collate_fn
@@ -132,12 +98,75 @@ def main():
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size, collate_fn=custom_collate_fn
     )
-    ts_features, meta_features, labels, Z_random_intercept = next(iter(train_loader))
-    print(f"Time Series Features: {ts_features.shape}")
-    print(f"Metadata: {meta_features.shape}")
-    print(f"Labels: {labels.shape}")
-    print(f"Random Intercepts Design Matrix: {Z_random_intercept.shape}")
-    print(Z_random_intercept[:, :, 0])
+    # Create the model
+    model = TSNN(
+        1,
+        metadata.shape[1] + 1,
+        hidden_merge_size,
+        hidden_ts_size,
+        hidden_meta_size,
+        num_layers,
+        output_size,
+        19,
+        "intercepts",
+    )
+
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+    loss_iterations_re_nn = []
+    for epoch in range(epochs):
+        for ts_features, meta_features, y_batch, Z_batch in train_loader:
+            for i in range(ts_features.size()[1]):
+                # print("TS Feature size ", ts_features[:, i,:].size())
+                # print("Z size ",Z_batch.size())
+                optimizer.zero_grad()
+                predictions = model(
+                    ts_features[:, i, :], meta_features, Z_batch[:, i, :]
+                )
+                covariance_matrix = model.random_effects.get_covariance_matrix()
+                nll = negative_log_likelihood(
+                    y_batch[:, i],
+                    predictions,
+                    Z_batch[:, i, :],
+                    covariance_matrix,
+                    model.random_effects.nr_random_effects,
+                    model.random_effects.nr_groups,
+                )
+                nll.backward()
+                optimizer.step()
+        loss_iterations_re_nn.append(nll.item())
+        if epoch % 10 == 0:
+            print(f"Epoch: {epoch}")
+    # output = model(ts_features, meta_features, Z_batch[:,-1,:])
+    # print(output.shape)
+    plt.plot(loss_iterations_re_nn)
+    plt.show()
+    with torch.no_grad():
+        test_y_list = []
+        test_predictions_list = []
+
+        for ts_features, meta_features, y_batch, Z_batch in test_loader:
+            for i in range(ts_features.size(1)):
+                predictions = model(
+                    ts_features[:, i, :], meta_features, Z_batch[:, i, :]
+                )
+
+                # Append the predictions and true values
+                test_predictions_list.append(predictions)
+                test_y_list.append(y_batch[:, i])
+
+        # Concatenate all batches
+        test_predictions_full = torch.cat(test_predictions_list, dim=0)
+        test_y_full = torch.cat(test_y_list, dim=0)
+
+        # Evaluate the model
+        evaluate_model(test_predictions_full, test_y_full, "TSNN Model")
+        visualise_regression_results(
+            test_y_full,
+            {
+                "RE NN Model": test_predictions_full,
+            },
+        )
 
 
 if __name__ == "__main__":
