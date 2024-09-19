@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
 
 def custom_collate_fn(batch):
@@ -177,9 +178,11 @@ class TSDataset(Dataset):
         metadata_row["type"] = 1 if "toprope" in file_name else 0
         metadata = torch.tensor(metadata_row.values, dtype=torch.float32)
         time_series_data = pd.read_csv(self.path_to_ts_folder / file_name)
-        time_series_features = torch.tensor(
-            time_series_data[self.selected_ts_features].values, dtype=torch.float32
+        scaler = StandardScaler()
+        time_series_features = scaler.fit_transform(
+            time_series_data[self.selected_ts_features]
         )
+        time_series_features = torch.tensor(time_series_features, dtype=torch.float32)
         time_series_targets = torch.tensor(
             self.aggregation_fun(time_series_data[self.selected_target], axis=1),
             dtype=torch.float32,
