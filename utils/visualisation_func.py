@@ -44,3 +44,18 @@ def visualise_regression_results(
     plt.title("Comparison of Predictions")
     plt.legend()
     plt.show()
+
+
+def plot_residuals(true_values: torch.Tensor, predictions: Dict[str, torch.Tensor]):
+    colors = ["red", "blue", "green"]
+    plt.figure(figsize=(12, 6))
+
+    for i, (model_name, prediction) in enumerate(predictions.items()):
+        res = prediction - true_values
+        plt.scatter(true_values, res, color=colors[i], alpha=0.5, label=model_name)
+    plt.axhline(0, color="black", linestyle="--")
+    plt.xlabel("True Values")
+    plt.ylabel("Residuals")
+    plt.title("Residuals Plot for RE and No RE Models")
+    plt.legend()
+    plt.show()

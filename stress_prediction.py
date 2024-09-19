@@ -6,14 +6,12 @@ import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-
 
 from dataloader.ts_dataloader import TSDataset, custom_collate_fn
-from models.timeseries_networks import TSNN, TSNNWithoutRE
+from models.timeseries_networks import TSNN, TSNNWithoutRE, LinearMixedEffectsModel
 from models.loss_functions import negative_log_likelihood
-from models.explainability import compute_saliency_map, plot_saliency
-from example_script import evaluate_model, visualise_regression_results
+from example_script import evaluate_model
+from utils.visualisation_func import visualise_regression_results, plot_residuals
 
 
 def train_test_split(dataset: TSDataset, split: float) -> Tuple[TSDataset]:
@@ -47,18 +45,16 @@ def preprocess_metadata(
         lambda x: x["Body mass (kg)"] / (x["Height (cm)"] / 100) ** 2, axis=1
     )
     metadata.fillna(metadata.mean(), inplace=True)
-    scaler = StandardScaler()
-    metadata.iloc[:, 1:] = scaler.fit_transform(metadata.iloc[:, 1:])
     return metadata
 
 
 def main():
-    sequence_length = 90
-    batch_size = 16
+    sequence_length = 30
+    batch_size = 32
     epochs = 100
     hidden_ts_size = 64
-    hidden_meta_size = 32
-    hidden_merge_size = 64
+    hidden_meta_size = 16
+    hidden_merge_size = 16
     num_layers = 1
     output_size = 1  # For regression
 
@@ -79,7 +75,7 @@ def main():
         "Approximate the number of hours that you spend bouldering per week",
     ]
     metadata = preprocess_metadata(metadata, selected_meta_features)
-    selected_ts_features = ["MNF"]
+    selected_ts_features = ["IEMG"]
     selected_targets = [
         "Anxiety level",
         "Fear of falling due to fatigue",
@@ -112,7 +108,7 @@ def main():
         num_layers,
         output_size,
         19,
-        "intercepts",
+        "slopes",
     )
     model_no_re = TSNNWithoutRE(
         len(selected_ts_features),
@@ -124,11 +120,26 @@ def main():
         output_size,
     )
 
-    optimizer_re = optim.Adam(model_re.parameters(), lr=0.01, weight_decay=1e-4)
+    linear_model = LinearMixedEffectsModel(
+        len(selected_ts_features),
+        metadata.shape[1] + 1,
+        hidden_merge_size,
+        hidden_ts_size,
+        hidden_meta_size,
+        output_size,
+        19,
+        "slopes",
+    )
+
+    optimizer_re = optim.Adam(model_re.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer_no_re = optim.Adam(model_no_re.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer_linear = optim.Adam(
+        linear_model.parameters(), lr=0.001, weight_decay=1e-4
+    )
 
     loss_iterations_re_nn = []
     loss_iterations_no_re_nn = []
+    loss_iterations_linear = []
 
     for epoch in range(epochs):
         for ts_features, meta_features, y_batch, Z_batch in train_loader:
@@ -150,6 +161,23 @@ def main():
                 nll_re.backward()
                 optimizer_re.step()
 
+                # Linear model
+                optimizer_linear.zero_grad()
+                predictions_linear = linear_model(
+                    ts_features[:, i, :], meta_features, Z_batch[:, i, :]
+                )
+                covariance_matrix = linear_model.random_effects.get_covariance_matrix()
+                nll_linear = negative_log_likelihood(
+                    y_batch[:, i],
+                    predictions_linear,
+                    Z_batch[:, i, :],
+                    covariance_matrix,
+                    linear_model.random_effects.nr_random_effects,
+                    linear_model.random_effects.nr_groups,
+                )
+                nll_linear.backward()
+                optimizer_linear.step()
+
                 # Model without random effects
                 optimizer_no_re.zero_grad()
                 predictions_no_re = model_no_re(ts_features[:, i, :], meta_features)
@@ -161,6 +189,7 @@ def main():
 
         loss_iterations_re_nn.append(nll_re.item())
         loss_iterations_no_re_nn.append(loss_no_re.item())
+        loss_iterations_linear.append(nll_linear.item())
 
         if epoch % 10 == 0:
             print(f"Epoch: {epoch}")
@@ -168,6 +197,7 @@ def main():
     # Plot the loss curves for both models
     plt.plot(loss_iterations_re_nn, label="Model with RE")
     plt.plot(loss_iterations_no_re_nn, label="Model without RE")
+    plt.plot(loss_iterations_linear, label="Linear")
     plt.legend()
     plt.show()
 
@@ -175,6 +205,7 @@ def main():
         test_y_list = []
         test_predictions_re_list = []
         test_predictions_no_re_list = []
+        test_predictions_linear_list = []
 
         for ts_features, meta_features, y_batch, Z_batch in test_loader:
             for i in range(ts_features.size(1)):
@@ -184,6 +215,10 @@ def main():
                 )
                 test_predictions_re_list.append(predictions_re)
 
+                predictions_linear = linear_model(
+                    ts_features[:, i, :], meta_features, Z_batch[:, i, :]
+                )
+                test_predictions_linear_list.append(predictions_linear)
                 # Model without random effects
                 predictions_no_re = model_no_re(ts_features[:, i, :], meta_features)
                 test_predictions_no_re_list.append(predictions_no_re)
@@ -194,10 +229,13 @@ def main():
         # Concatenate all batches
         test_predictions_re_full = torch.cat(test_predictions_re_list, dim=0)
         test_predictions_no_re_full = torch.cat(test_predictions_no_re_list, dim=0)
+        test_predictions_linear_full = torch.cat(test_predictions_linear_list, dim=0)
         test_y_full = torch.cat(test_y_list, dim=0)
-
         # Evaluate the models
         evaluate_model(test_predictions_re_full, test_y_full, "TSNN Model with RE")
+        evaluate_model(
+            test_predictions_linear_full, test_y_full, "Linear Model with RE"
+        )
         evaluate_model(
             test_predictions_no_re_full, test_y_full, "TSNN Model without RE"
         )
@@ -205,8 +243,17 @@ def main():
         visualise_regression_results(
             test_y_full,
             {
-                "RE NN Model": test_predictions_re_full,
-                "No RE NN Model": test_predictions_no_re_full,
+                "RE NN Model": test_predictions_re_full.squeeze(-1),
+                "No RE NN Model": test_predictions_no_re_full.squeeze(-1),
+                # "Linear": test_predictions_linear_full,
+            },
+        )
+        plot_residuals(
+            test_y_full,
+            {
+                "RE NN Model": test_predictions_re_full.squeeze(-1),
+                "No RE NN Model": test_predictions_no_re_full.squeeze(-1),
+                "Linear": test_predictions_linear_full.squeeze(-1),
             },
         )
 

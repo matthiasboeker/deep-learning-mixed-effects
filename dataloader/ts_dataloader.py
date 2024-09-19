@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
 
 def custom_collate_fn(batch):
@@ -51,12 +52,6 @@ def custom_collate_fn(batch):
     metadata_batch = torch.stack(metadata_batch)
 
     return windows_batch, metadata_batch, targets_batch, random_intercepts_batch
-
-
-def create_random_intercepts_design_matrix(n: int, q: int) -> torch.Tensor:
-    Z = torch.zeros(n, q)
-    Z[:, 0] = 1  # Random intercept for each participant (1 for all windows)
-    return Z
 
 
 def empty_aggregation(targets: pd.Series):
@@ -177,9 +172,14 @@ class TSDataset(Dataset):
         metadata_row["type"] = 1 if "toprope" in file_name else 0
         metadata = torch.tensor(metadata_row.values, dtype=torch.float32)
         time_series_data = pd.read_csv(self.path_to_ts_folder / file_name)
-        time_series_features = torch.tensor(
-            time_series_data[self.selected_ts_features].values, dtype=torch.float32
+        quarters = torch.tensor(
+            time_series_data["quarters"].values, dtype=torch.float32
         )
+        ts_scaler = StandardScaler()
+        time_series_features = ts_scaler.fit_transform(
+            time_series_data[self.selected_ts_features]
+        )
+        time_series_features = torch.tensor(time_series_features, dtype=torch.float32)
         time_series_targets = torch.tensor(
             self.aggregation_fun(time_series_data[self.selected_target], axis=1),
             dtype=torch.float32,
@@ -194,39 +194,32 @@ class TSDataset(Dataset):
         metadata_repeated = metadata.repeat(
             windows_tensor.size(0), 1
         )  # Repeat metadata for each window
-        Z_dynamic = self.create_random_intercepts_design_matrix(
-            [participant_id], self.participants_ids, windows_tensor.size(0)
+        # Update the random intercept and slopes matrix
+        Z_dynamic = self.create_random_slopes_design_matrix(
+            [participant_id], self.participants_ids, windows_tensor.size(0), quarters
         )
-
         return windows_tensor, metadata_repeated, targets_tensor, Z_dynamic
 
-    def create_random_intercepts_design_matrix(
+    def create_random_slopes_design_matrix(
         self,
         batch_participants: List[str],
         all_participants: List[str],
         num_windows: int,
+        quarters: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Create the design matrix for random intercepts.
-
-        Args:
-            batch_participants (List[int]): List of participant IDs in the current batch.
-            all_participants (List[int]): List of all participant IDs in the dataset.
-            num_windows (int): Number of windows (repeated rows for each participant).
-
-        Returns:
-            torch.Tensor: Design matrix of size [num_windows, num_participants].
-        """
         num_participants = len(all_participants)
+        Z_batch = torch.zeros(num_windows, num_participants * 2)
 
-        # Create a design matrix of size [num_windows, num_participants]
-        Z_batch = torch.zeros(num_windows, num_participants)
+        participant_indices = torch.tensor(
+            [
+                self.participant_id_to_idx[participant_id]
+                for participant_id in batch_participants
+            ]
+        )
 
-        # Use the mapping to find the correct column in Z_batch
-        for participant_id in batch_participants:
-            participant_idx = self.participant_id_to_idx[participant_id]
-            Z_batch[
-                :, participant_idx
-            ] = 1  # Set the column corresponding to the participant to 1
-
+        # For each window, set the appropriate column to 1 for the intercept and quarters for the slope
+        for i, participant_idx in enumerate(participant_indices):
+            # Random intercept column
+            Z_batch[:, participant_idx] = 1
+            Z_batch[:, num_participants + participant_idx] = quarters[i]
         return Z_batch

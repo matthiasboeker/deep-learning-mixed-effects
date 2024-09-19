@@ -29,13 +29,11 @@ class TSNN(nn.Module):
 
     def forward(self, ts, x, Z):
         h0 = torch.zeros(self.num_layers, ts.size(0), self.hidden_ts_size).to(ts.device)
-        # print("H0 ", h0.size())
-        # print("ts ", ts.size())
         out_rnn, _ = self.rnn(ts, h0)  # [batch, sequence, rnn_hiddensize]
         out_rnn = out_rnn[:, -1, :]  # [batch, rnn_hiddensize]
-        meta_out = F.relu(self.fc_meta(x))  # [batch, meta_hiddensize]
+        meta_out = torch.relu(self.fc_meta(x))  # [batch, meta_hiddensize]
         combined = torch.cat((out_rnn, meta_out), dim=1)
-        merged = F.relu(self.fc_merge(combined))
+        merged = torch.relu(self.fc_merge(combined))
         merged = self.dropout(merged)
         merged = self.fc_output(merged)
         return merged + self.random_effects(Z)
@@ -65,8 +63,56 @@ class TSNNWithoutRE(nn.Module):
         h0 = torch.zeros(self.num_layers, ts.size(0), self.hidden_ts_size).to(ts.device)
         out_rnn, _ = self.rnn(ts, h0)  # [batch, sequence, rnn_hidden_size]
         out_rnn = out_rnn[:, -1, :]  # [batch, rnn_hidden_size]
-        meta_out = F.relu(self.fc_meta(x))  # [batch, meta_hidden_size]
+        meta_out = torch.relu(self.fc_meta(x))  # [batch, meta_hidden_size]
         combined = torch.cat((out_rnn, meta_out), dim=1)
-        merged = F.relu(self.fc_merge(combined))
+        merged = torch.relu(self.fc_merge(combined))
         merged = self.dropout(merged)
         return self.fc_output(merged)
+
+
+class LinearMixedEffectsModel(nn.Module):
+    def __init__(
+        self,
+        ts_input_size,
+        meta_input_size,
+        hidden_merge_size,
+        hidden_ts_size,
+        hidden_meta_size,
+        output_size,
+        nr_groups,
+        num_random_effects,
+    ):
+        super(LinearMixedEffectsModel, self).__init__()
+
+        # Linear transformations for fixed effects
+        self.fixed_effect_ts = nn.Linear(
+            ts_input_size, hidden_ts_size
+        )  # Time series fixed effect
+        self.fixed_effect_meta = nn.Linear(
+            meta_input_size, hidden_meta_size
+        )  # Meta-data fixed effect
+
+        # Combine fixed effects (time series + meta data)
+        self.fc_merge = nn.Linear(hidden_ts_size + hidden_meta_size, hidden_merge_size)
+        self.fc_output = nn.Linear(hidden_merge_size, output_size)
+
+        # Random effects: intercept and slope
+        self.random_effects = RandomEffectLayer(
+            nr_groups, num_random_effects
+        )  # Random effects layer
+        self.hidden_ts_size = hidden_ts_size
+
+    def forward(self, ts, meta_data, Z):
+        # Fixed effects
+        ts_fixed_effect = torch.mean(
+            self.fixed_effect_ts(ts), dim=1
+        )  # [batch, ts_features] fixed effect
+        meta_fixed_effect = self.fixed_effect_meta(
+            meta_data
+        )  # [batch, meta_features] fixed effect
+        # Combine fixed effects
+        combined_fixed_effects = torch.cat((ts_fixed_effect, meta_fixed_effect), dim=1)
+        merged = self.fc_merge(combined_fixed_effects)
+        merged = self.fc_output(merged)
+        output = merged + self.random_effects(Z)
+        return output
