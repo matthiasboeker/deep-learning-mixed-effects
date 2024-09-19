@@ -6,8 +6,6 @@ import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-
 
 from dataloader.ts_dataloader import TSDataset, custom_collate_fn
 from models.cnn_models import TSCNN, TSCNNRE
@@ -47,8 +45,6 @@ def preprocess_metadata(
         lambda x: x["Body mass (kg)"] / (x["Height (cm)"] / 100) ** 2, axis=1
     )
     metadata.fillna(metadata.mean(), inplace=True)
-    scaler = StandardScaler()
-    metadata.iloc[:, 1:] = scaler.fit_transform(metadata.iloc[:, 1:])
     return metadata
 
 

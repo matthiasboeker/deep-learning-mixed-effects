@@ -46,8 +46,6 @@ def preprocess_metadata(
         lambda x: x["Body mass (kg)"] / (x["Height (cm)"] / 100) ** 2, axis=1
     )
     metadata.fillna(metadata.mean(), inplace=True)
-    scaler = StandardScaler()
-    metadata.iloc[:, 1:] = scaler.fit_transform(metadata.iloc[:, 1:])
     return metadata
 
 
