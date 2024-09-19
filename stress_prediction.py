@@ -10,9 +10,8 @@ from sklearn.preprocessing import StandardScaler
 
 
 from dataloader.ts_dataloader import TSDataset, custom_collate_fn
-from models.timeseries_networks import TSNN, TSNNWithoutRE
+from models.timeseries_networks import TSNN, TSNNRE
 from models.loss_functions import negative_log_likelihood
-from models.explainability import compute_saliency_map, plot_saliency
 from example_script import evaluate_model, visualise_regression_results
 
 
@@ -114,7 +113,7 @@ def main():
         19,
         "intercepts",
     )
-    model_no_re = TSNNWithoutRE(
+    model_no_re = TSNNRE(
         len(selected_ts_features),
         metadata.shape[1] + 1,
         hidden_merge_size,
@@ -124,7 +123,7 @@ def main():
         output_size,
     )
 
-    optimizer_re = optim.Adam(model_re.parameters(), lr=0.01, weight_decay=1e-4)
+    optimizer_re = optim.Adam(model_re.parameters(), lr=0.001, weight_decay=1e-4)
     optimizer_no_re = optim.Adam(model_no_re.parameters(), lr=0.001, weight_decay=1e-4)
 
     loss_iterations_re_nn = []
