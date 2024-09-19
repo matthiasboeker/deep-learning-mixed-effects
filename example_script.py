@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split  # type: ignore
-from sklearn.metrics import mean_squared_error, r2_score  # type: ignore
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler  # type: ignore
 
@@ -16,6 +15,7 @@ from utils.visualisation_func import (
     visualise_regression_results,
     visualise_longitudinal_data,
 )
+from utils.evaluation import evaluate_model
 
 # Neural Network Model with Random Effects
 class NetWithRE(nn.Module):
@@ -60,14 +60,6 @@ class LinearModel(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
         return x + self.random_effects(Z)
-
-
-def evaluate_model(predictions, y_true, model_name):
-    with torch.no_grad():
-        y_pred = predictions
-        mse = mean_squared_error(y_true, y_pred)
-        r2 = r2_score(y_true, y_pred)
-        print(f"{model_name} - MSE: {mse:.4f}, R^2: {r2:.4f}")
 
 
 # Utility Functions
