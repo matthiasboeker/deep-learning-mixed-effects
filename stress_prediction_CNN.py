@@ -10,9 +10,10 @@ from sklearn.preprocessing import StandardScaler
 
 
 from dataloader.ts_dataloader import TSDataset, custom_collate_fn
-from models.timeseries_networks import TSNN, TSNNRE
+from models.cnn_models import TSCNN, TSCNNRE
 from models.loss_functions import negative_log_likelihood
-from example_script import evaluate_model, visualise_regression_results
+from utils.evaluation import evaluate_model
+from utils.visualisation_func import visualise_regression_results
 
 
 def train_test_split(dataset: TSDataset, split: float) -> Tuple[TSDataset]:
@@ -52,13 +53,13 @@ def preprocess_metadata(
 
 
 def main():
-    sequence_length = 90
+    sequence_length = 60
     batch_size = 16
-    epochs = 100
+    epochs = 150
     hidden_ts_size = 64
     hidden_meta_size = 32
     hidden_merge_size = 64
-    num_layers = 1
+    num_channels = 10
     output_size = 1  # For regression
 
     path_to_ts_folder = Path(__file__).parent / "data" / "climbing_data"
@@ -78,7 +79,7 @@ def main():
         "Approximate the number of hours that you spend bouldering per week",
     ]
     metadata = preprocess_metadata(metadata, selected_meta_features)
-    selected_ts_features = ["MNF"]
+    selected_ts_features = ["IEMG"]
     selected_targets = [
         "Anxiety level",
         "Fear of falling due to fatigue",
@@ -102,25 +103,25 @@ def main():
     )
 
     # Create the model with and without random effects
-    model_re = TSNN(
+    model_no_re = TSCNN(
         len(selected_ts_features),
         metadata.shape[1] + 1,
         hidden_merge_size,
         hidden_ts_size,
         hidden_meta_size,
-        num_layers,
+        output_size,
+        num_channels,
+    )
+    model_re = TSCNNRE(
+        len(selected_ts_features),
+        metadata.shape[1] + 1,
+        hidden_merge_size,
+        hidden_ts_size,
+        hidden_meta_size,
         output_size,
         19,
         "intercepts",
-    )
-    model_no_re = TSNNRE(
-        len(selected_ts_features),
-        metadata.shape[1] + 1,
-        hidden_merge_size,
-        hidden_ts_size,
-        hidden_meta_size,
-        num_layers,
-        output_size,
+        num_channels,
     )
 
     optimizer_re = optim.Adam(model_re.parameters(), lr=0.001, weight_decay=1e-4)
