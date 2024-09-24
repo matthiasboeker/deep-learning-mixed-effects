@@ -20,9 +20,18 @@ def custom_collate_fn(batch):
     padded_windows = []
     padded_targets = []
     metadata_batch = []
+    quarters_batch = []
+    type_batch = []
     random_intercepts_batch = []
 
-    for windows_tensor, metadata_repeated, targets_tensor, Z_random_intercept in batch:
+    for (
+        windows_tensor,
+        metadata_repeated,
+        targets_tensor,
+        Z_random_intercept,
+        quarters,
+        types,
+    ) in batch:
         # Pad the windows_tensor to the max number of windows
         pad_size = max_num_windows - windows_tensor.size(0)
         if pad_size > 0:
@@ -34,10 +43,12 @@ def custom_collate_fn(batch):
             Z_random_intercept = torch.nn.functional.pad(
                 Z_random_intercept, (0, 0, 0, pad_size)
             )
-
+            quarters = torch.nn.functional.pad(quarters, (0, pad_size))
         padded_windows.append(windows_tensor)
         padded_targets.append(targets_tensor)
         random_intercepts_batch.append(Z_random_intercept)
+        quarters_batch.append(quarters)
+        type_batch.append(types[0])
         # Metadata should only be added once per participant, so we just append it without repeating it
         metadata_batch.append(
             metadata_repeated[0]
@@ -47,11 +58,20 @@ def custom_collate_fn(batch):
     windows_batch = torch.stack(padded_windows)
     targets_batch = torch.stack(padded_targets)
     random_intercepts_batch = torch.stack(random_intercepts_batch)
+    type_batch = torch.stack(type_batch)
+    quarters_batch = torch.stack(quarters_batch, dim=0)
 
     # Stack metadata (one entry per participant)
     metadata_batch = torch.stack(metadata_batch)
 
-    return windows_batch, metadata_batch, targets_batch, random_intercepts_batch
+    return (
+        windows_batch,
+        metadata_batch,
+        targets_batch,
+        random_intercepts_batch,
+        quarters_batch,
+        type_batch,
+    )
 
 
 def create_random_intercepts_design_matrix(n: int, q: int) -> torch.Tensor:
@@ -175,10 +195,15 @@ class TSDataset(Dataset):
         metadata_row = self.metadata[
             self.metadata["Participant ID"] == int(participant_id)
         ].copy()
-        metadata_row["type"] = 1 if "toprope" in file_name else 0
+        climbing_type = 0 if "toprope" in file_name else 1
+
         metadata = torch.tensor(metadata_row.values, dtype=torch.float32)
         time_series_data = pd.read_csv(self.path_to_ts_folder / file_name)
         scaler = StandardScaler()
+        quarters = torch.tensor(
+            time_series_data["quarters"].values, dtype=torch.float32
+        )
+
         time_series_features = scaler.fit_transform(
             time_series_data[self.selected_ts_features]
         )
@@ -191,6 +216,12 @@ class TSDataset(Dataset):
         windows_tensor = create_ts_windows(
             time_series_features, self.sequence_length
         )  # Shape: [num_windows, sequence_length, num_features]
+        windows_quarter = create_target_windows(quarters, self.sequence_length)
+        types = (
+            torch.Tensor([climbing_type, int(participant_id)])
+            .unsqueeze(0)
+            .repeat(windows_quarter.size(0), 1)
+        )
         targets_tensor = create_target_windows(
             time_series_targets, self.sequence_length
         )
@@ -201,7 +232,14 @@ class TSDataset(Dataset):
             [participant_id], self.participants_ids, windows_tensor.size(0)
         )
 
-        return windows_tensor, metadata_repeated, targets_tensor, Z_dynamic
+        return (
+            windows_tensor,
+            metadata_repeated,
+            targets_tensor,
+            Z_dynamic,
+            windows_quarter,
+            types,
+        )
 
     def create_random_intercepts_design_matrix(
         self,
